@@ -42,3 +42,19 @@
 
 - manifest 版本标记为 `0.5.0-lite.1`，domain 与名称与官方版一致（`xiaomi_home` / “Xiaomi Home”），可直接覆盖官方版目录使用，原配置条目通用。
 - 安装：把 `custom_components/xiaomi_home` 覆盖到 HA 的 `custom_components` 后重启。
+
+## 第二批（v0.5.0-lite.2）：自动化 + AI 助手
+
+6. **设备自动化三件套**（`trigger.py` / `device_condition.py` / `device_action.py`）
+   自动化编辑器里可以直接选小米设备：
+   - 触发器：任意可读属性的“属性变化”（可附加目标值）
+   - 条件：任意可读属性的“属性是某值”（读实体当前缓存值）
+   - 动作：任意可写属性的“设置属性”、任意 MIoT 动作的“调用动作”
+
+7. **自带 AI 助手（BYOK）**（`lite_safety.py` / `conversation.py`）
+   - 设置方式：调用 `xiaomi_home.configure_ai` 服务，自填 Base URL、API Key、
+     模型名（OpenAI 兼容接口），存 HA 自身存储，不经任何第三方服务器。
+   - `xiaomi_home.ask_ai` 服务：带全屋设备与实体状态快照提问，可返回文本；
+     `allow_control=true` 时允许它执行一条白名单内的服务调用。
+   - 同时注册为 HA 对话代理，可在“设置 → 语音助手”里选用，用自然语言
+     问状态、下指令（执行同样受服务白名单限制）。

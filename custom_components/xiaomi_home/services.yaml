@@ -97,3 +97,49 @@ action:
       name: Input parameters
       description: Optional list of input parameters for the action.
       required: false
+
+configure_ai:
+  name: Configure AI assistant
+  description: >-
+    Store the BYOK AI assistant settings (OpenAI-compatible endpoint)
+    in Home Assistant storage (Lite-Safety).
+  fields:
+    base_url:
+      name: Base URL
+      description: API base URL, e.g. https://api.openai.com/v1
+      required: true
+      selector:
+        text:
+    api_key:
+      name: API key
+      description: API key for the endpoint. Stored in HA storage only.
+      required: true
+      selector:
+        text:
+    model:
+      name: Model
+      description: Model name, e.g. gpt-4o-mini.
+      required: true
+      selector:
+        text:
+
+ask_ai:
+  name: Ask AI assistant
+  description: >-
+    Ask the BYOK AI assistant about the home, optionally allowing it
+    to execute one allow-listed service call (Lite-Safety, returns a
+    response).
+  fields:
+    prompt:
+      name: Prompt
+      description: What to ask the assistant.
+      required: true
+      selector:
+        text:
+    allow_control:
+      name: Allow control
+      description: Allow the assistant to execute one allow-listed service call.
+      required: false
+      default: false
+      selector:
+        boolean:

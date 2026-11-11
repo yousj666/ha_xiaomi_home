@@ -65,6 +65,9 @@ from .miot.const import (
 from .miot.miot_error import MIoTOauthError
 from .miot.miot_device import MIoTDevice
 from .miot.miot_client import MIoTClient, get_miot_instance_async
+from .lite_safety import (
+    async_ask_ai, async_load_ai_config, async_save_ai_config,
+    ha_device_id_for_did)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,9 +97,20 @@ def _wire_client_hooks(hass: HomeAssistant, miot_client: MIoTClient) -> None:
         return
     miot_client._lite_safety_hooks_wired = True  # type: ignore[attr-defined]
 
+    device_id_cache: dict[str, str] = {}
+
+    def _ha_device_id(did: str) -> Optional[str]:
+        if did not in device_id_cache:
+            resolved = ha_device_id_for_did(
+                hass=hass, client=miot_client, did=did)
+            if resolved:
+                device_id_cache[did] = resolved
+        return device_id_cache.get(did)
+
     def _on_prop_msg(params: dict) -> None:
         info = miot_client.device_list.get(params.get('did'), {})
         hass.bus.async_fire(EVENT_PROPERTY_CHANGED, {
+            'device_id': _ha_device_id(params.get('did')),
             'did': params.get('did'),
             'device_name': info.get('name'),
             'model': info.get('model'),
@@ -108,6 +122,7 @@ def _wire_client_hooks(hass: HomeAssistant, miot_client: MIoTClient) -> None:
     def _on_event_msg(params: dict) -> None:
         info = miot_client.device_list.get(params.get('did'), {})
         hass.bus.async_fire(EVENT_DEVICE_EVENT, {
+            'device_id': _ha_device_id(params.get('did')),
             'did': params.get('did'),
             'device_name': info.get('name'),
             'model': info.get('model'),
@@ -155,6 +170,37 @@ def _register_services(hass: HomeAssistant) -> None:
             did=did, siid=call.data['siid'], aiid=call.data['aiid'],
             in_list=call.data.get('in_list') or [])
         return {'did': did, 'out': out}
+
+    async def _configure_ai(call: ServiceCall) -> dict:
+        config = await async_save_ai_config(
+            hass,
+            base_url=call.data['base_url'],
+            api_key=call.data['api_key'],
+            model=call.data['model'])
+        return {
+            'base_url': config['base_url'], 'model': config['model'],
+            'configured': True}
+
+    async def _ask_ai(call: ServiceCall) -> dict:
+        await async_load_ai_config(hass)
+        text = await async_ask_ai(
+            hass, call.data['prompt'],
+            allow_control=call.data.get('allow_control', False))
+        return {'response': text}
+
+    hass.services.async_register(
+        DOMAIN, 'configure_ai', _configure_ai,
+        schema=vol.Schema({
+            vol.Required('base_url'): cv.string,
+            vol.Required('api_key'): cv.string,
+            vol.Required('model'): cv.string}),
+        supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(
+        DOMAIN, 'ask_ai', _ask_ai,
+        schema=vol.Schema({
+            vol.Required('prompt'): cv.string,
+            vol.Optional('allow_control', default=False): cv.boolean}),
+        supports_response=SupportsResponse.ONLY)
 
     prop_schema = {
         vol.Required('did'): cv.string,
@@ -274,6 +320,14 @@ async def async_setup_entry(
             entry_data=entry_data,
             persistent_notify=ha_persistent_notify)
         _wire_client_hooks(hass=hass, miot_client=miot_client)
+        # Lite-Safety: register the BYOK AI conversation agent.
+        try:
+            from homeassistant.components import conversation as _ha_conv
+            from .conversation import LiteSafetyConversationAgent
+            _ha_conv.async_set_agent(
+                hass, config_entry, LiteSafetyConversationAgent(config_entry))
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning('Lite-Safety AI agent not registered, %s', err)
         # Spec parser
         spec_parser = MIoTSpecParser(
             lang=entry_data.get(
@@ -471,6 +525,12 @@ async def async_unload_entry(
 ) -> bool:
     """Unload the entry."""
     entry_id = config_entry.entry_id
+    # Lite-Safety: unregister the BYOK AI conversation agent.
+    try:
+        from homeassistant.components import conversation as _ha_conv
+        _ha_conv.async_unset_agent(hass, config_entry)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
     # Unload the platform
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, SUPPORTED_PLATFORMS)
