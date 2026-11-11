@@ -230,6 +230,11 @@ class MIoTClient:
         self._device_list_lan = {}
         self._device_list_update_ts = 0
         self._sub_source_list = {}
+        # Lite-Safety: optional observers, set by the integration entry
+        # setup. Called with the raw params dict of every property/event
+        # message dispatched by this client. Must not raise.
+        self.on_prop_msg_hook = None
+        self.on_event_msg_hook = None
         self._sub_tree = MIoTMatcher()
         self._sub_device_state = {}
 
@@ -1323,6 +1328,11 @@ class MIoTClient:
     def __on_prop_msg(self, params: dict, ctx: Any) -> None:
         """params MUST contain did, siid, piid, value"""
         # BLE device has no online/offline msg
+        if self.on_prop_msg_hook is not None:
+            try:
+                self.on_prop_msg_hook(params)
+            except Exception as err:  # pylint: disable=broad-exception-caught
+                _LOGGER.error('on prop msg hook error, %s', err)
         try:
             subs: list[MIoTClientSub] = list(self._sub_tree.iter_match(
                 f'{params["did"]}/p/{params["siid"]}/{params["piid"]}'))
@@ -1333,6 +1343,11 @@ class MIoTClient:
 
     @final
     def __on_event_msg(self, params: dict, ctx: Any) -> None:
+        if self.on_event_msg_hook is not None:
+            try:
+                self.on_event_msg_hook(params)
+            except Exception as err:  # pylint: disable=broad-exception-caught
+                _LOGGER.error('on event msg hook error, %s', err)
         try:
             subs: list[MIoTClientSub] = list(self._sub_tree.iter_match(
                 f'{params["did"]}/e/{params["siid"]}/{params["eiid"]}'))

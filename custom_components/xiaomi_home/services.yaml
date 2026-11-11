@@ -1,0 +1,99 @@
+get_properties:
+  name: Get properties
+  description: >-
+    Read a raw MIoT property value from a Xiaomi device
+    (Lite-Safety service, returns a response).
+  fields:
+    did:
+      name: Device ID
+      description: The MIoT device id (did) of the target device.
+      required: true
+      selector:
+        text:
+    siid:
+      name: Service ID (siid)
+      description: The MIoT service id of the property.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    piid:
+      name: Property ID (piid)
+      description: The MIoT property id.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+
+set_properties:
+  name: Set properties
+  description: >-
+    Write a raw MIoT property value on a Xiaomi device
+    (Lite-Safety service).
+  fields:
+    did:
+      name: Device ID
+      description: The MIoT device id (did) of the target device.
+      required: true
+      selector:
+        text:
+    siid:
+      name: Service ID (siid)
+      description: The MIoT service id of the property.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    piid:
+      name: Property ID (piid)
+      description: The MIoT property id.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    value:
+      name: Value
+      description: The value to write.
+      required: true
+
+action:
+  name: Action
+  description: >-
+    Call a raw MIoT action on a Xiaomi device (Lite-Safety service).
+  fields:
+    did:
+      name: Device ID
+      description: The MIoT device id (did) of the target device.
+      required: true
+      selector:
+        text:
+    siid:
+      name: Service ID (siid)
+      description: The MIoT service id of the action.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    aiid:
+      name: Action ID (aiid)
+      description: The MIoT action id.
+      required: true
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+    in_list:
+      name: Input parameters
+      description: Optional list of input parameters for the action.
+      required: false

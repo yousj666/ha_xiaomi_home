@@ -62,8 +62,27 @@ from .miot_storage import MIoTStorage
 _LOGGER = logging.getLogger(__name__)
 
 
+# Lite-Safety: intern identical spec value lists across devices/models.
+# Value lists are immutable after construction, so sharing one object for
+# every identical enum definition removes a large amount of duplicated
+# spec data when many devices (or models) are loaded.
+_VALUE_LIST_INTERN: dict[str, 'MIoTSpecValueList'] = {}
+_VALUE_LIST_INTERN_MAX: int = 8192
+
+
+def _value_list_intern_key(value_list: list, source: str) -> Optional[str]:
+    """Fingerprint a raw value list for interning, None if not hashable."""
+    try:
+        return source + ':' + repr([
+            (item.get('value'), item.get('description'), item.get('name'))
+            for item in value_list])
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
 class MIoTSpecValueRange:
     """MIoT SPEC value range class."""
+    __slots__ = ('min_', 'max_', 'step')
     min_: int
     max_: int
     step: int | float
@@ -100,6 +119,7 @@ class MIoTSpecValueRange:
 
 class MIoTSpecValueListItem:
     """MIoT SPEC value list item class."""
+    __slots__ = ('name', 'value', 'description')
     # NOTICE: bool type without name
     name: str
     # Value
@@ -144,6 +164,7 @@ class MIoTSpecValueListItem:
 
 class MIoTSpecValueList:
     """MIoT SPEC value list class."""
+    __slots__ = ('items',)
     # pylint: disable=inconsistent-quotes
     items: list[MIoTSpecValueListItem]
 
@@ -167,6 +188,11 @@ class MIoTSpecValueList:
 
     @staticmethod
     def from_spec(value_list: list[dict]) -> 'MIoTSpecValueList':
+        intern_key = _value_list_intern_key(value_list, 'spec')
+        if intern_key is not None:
+            cached = _VALUE_LIST_INTERN.get(intern_key)
+            if cached is not None:
+                return cached
         result = MIoTSpecValueList([])
         dup_desc: dict[str, int] = {}
         for item in value_list:
@@ -181,6 +207,9 @@ class MIoTSpecValueList:
                 item['description'] = f'{item["description"]}_{count}'
 
             result.items.append(MIoTSpecValueListItem.from_spec(item))
+        if intern_key is not None and \
+                len(_VALUE_LIST_INTERN) < _VALUE_LIST_INTERN_MAX:
+            _VALUE_LIST_INTERN[intern_key] = result
         return result
 
     def load(self, value_list: list[dict]) -> None:
@@ -205,6 +234,18 @@ class MIoTSpecValueList:
     def dump(self) -> list:
         return [item.dump() for item in self.items]
 
+
+def _intern_value_list(value_list: list) -> 'MIoTSpecValueList':
+    """Return a shared MIoTSpecValueList for identical raw list data."""
+    key = _value_list_intern_key(value_list, 'load')
+    if key is not None:
+        cached = _VALUE_LIST_INTERN.get(key)
+        if cached is not None:
+            return cached
+    result = MIoTSpecValueList(value_list=value_list)
+    if key is not None and len(_VALUE_LIST_INTERN) < _VALUE_LIST_INTERN_MAX:
+        _VALUE_LIST_INTERN[key] = result
+    return result
 
 class _SpecStdLib:
     """MIoT-Spec-V2 standard library."""
@@ -581,7 +622,7 @@ class MIoTSpecProperty(_MIoTSpecBase):
             self._value_list = None
             return
         if isinstance(value, list):
-            self._value_list = MIoTSpecValueList(value_list=value)
+            self._value_list = _intern_value_list(value)
         elif isinstance(value, MIoTSpecValueList):
             self._value_list = value
 

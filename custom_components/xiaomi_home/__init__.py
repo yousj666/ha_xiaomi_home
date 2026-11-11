@@ -50,7 +50,8 @@ import logging
 from typing import Optional
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+import voluptuous as vol
 from homeassistant.components import persistent_notification
 from homeassistant.helpers import config_validation as cv, device_registry, entity_registry
 
@@ -67,6 +68,119 @@ from .miot.miot_client import MIoTClient, get_miot_instance_async
 
 _LOGGER = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Lite-Safety additions (fork of ha_xiaomi_home v0.5.0)
+# - Domain services to read/write raw MIoT properties and call actions.
+# - HA bus events for every property change / device event the client
+#   dispatches, so automations can use values that have no entity.
+# Neither changes the config flow or any entity/UI surface.
+# ---------------------------------------------------------------------------
+EVENT_PROPERTY_CHANGED: str = f'{DOMAIN}_property_changed'
+EVENT_DEVICE_EVENT: str = f'{DOMAIN}_event_occurred'
+
+
+def _find_client(hass: HomeAssistant, did: str) -> Optional[MIoTClient]:
+    """Find the MIoTClient instance that owns a device id."""
+    for client in hass.data[DOMAIN].get('miot_clients', {}).values():
+        if did in client.device_list:
+            return client
+    return None
+
+
+def _wire_client_hooks(hass: HomeAssistant, miot_client: MIoTClient) -> None:
+    """Forward client property/event messages to the HA event bus."""
+    if getattr(miot_client, '_lite_safety_hooks_wired', False):
+        return
+    miot_client._lite_safety_hooks_wired = True  # type: ignore[attr-defined]
+
+    def _on_prop_msg(params: dict) -> None:
+        info = miot_client.device_list.get(params.get('did'), {})
+        hass.bus.async_fire(EVENT_PROPERTY_CHANGED, {
+            'did': params.get('did'),
+            'device_name': info.get('name'),
+            'model': info.get('model'),
+            'siid': params.get('siid'),
+            'piid': params.get('piid'),
+            'value': params.get('value'),
+        })
+
+    def _on_event_msg(params: dict) -> None:
+        info = miot_client.device_list.get(params.get('did'), {})
+        hass.bus.async_fire(EVENT_DEVICE_EVENT, {
+            'did': params.get('did'),
+            'device_name': info.get('name'),
+            'model': info.get('model'),
+            'siid': params.get('siid'),
+            'eiid': params.get('eiid'),
+            'arguments': params.get('arguments'),
+        })
+
+    miot_client.on_prop_msg_hook = _on_prop_msg
+    miot_client.on_event_msg_hook = _on_event_msg
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    """Register the Lite-Safety domain services (once)."""
+    if hass.services.has_service(DOMAIN, 'get_properties'):
+        return
+
+    async def _get_properties(call: ServiceCall) -> dict:
+        did = call.data['did']
+        client = _find_client(hass, did)
+        if client is None:
+            raise ValueError(f'xiaomi_home: device not found, {did}')
+        value = await client.get_prop_async(
+            did=did, siid=call.data['siid'], piid=call.data['piid'])
+        return {
+            'did': did, 'siid': call.data['siid'],
+            'piid': call.data['piid'], 'value': value}
+
+    async def _set_properties(call: ServiceCall) -> dict:
+        did = call.data['did']
+        client = _find_client(hass, did)
+        if client is None:
+            raise ValueError(f'xiaomi_home: device not found, {did}')
+        ok = await client.set_prop_async(
+            did=did, siid=call.data['siid'], piid=call.data['piid'],
+            value=call.data['value'])
+        return {'did': did, 'success': bool(ok)}
+
+    async def _action(call: ServiceCall) -> dict:
+        did = call.data['did']
+        client = _find_client(hass, did)
+        if client is None:
+            raise ValueError(f'xiaomi_home: device not found, {did}')
+        out = await client.action_async(
+            did=did, siid=call.data['siid'], aiid=call.data['aiid'],
+            in_list=call.data.get('in_list') or [])
+        return {'did': did, 'out': out}
+
+    prop_schema = {
+        vol.Required('did'): cv.string,
+        vol.Required('siid'): cv.positive_int,
+        vol.Required('piid'): cv.positive_int,
+    }
+    hass.services.async_register(
+        DOMAIN, 'get_properties', _get_properties,
+        schema=vol.Schema(prop_schema),
+        supports_response=SupportsResponse.ONLY)
+    hass.services.async_register(
+        DOMAIN, 'set_properties', _set_properties,
+        schema=vol.Schema({
+            **prop_schema,
+            vol.Required('value'): vol.Any(
+                bool, int, float, str, list, dict)}),
+        supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(
+        DOMAIN, 'action', _action,
+        schema=vol.Schema({
+            vol.Required('did'): cv.string,
+            vol.Required('siid'): cv.positive_int,
+            vol.Required('aiid'): cv.positive_int,
+            vol.Optional('in_list', default=[]): list}),
+        supports_response=SupportsResponse.OPTIONAL)
+
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -81,6 +195,7 @@ async def async_setup(hass: HomeAssistant, hass_config: dict) -> bool:
     hass.data[DOMAIN].setdefault('entities', {})
     for platform in SUPPORTED_PLATFORMS:
         hass.data[DOMAIN]['entities'][platform] = []
+    _register_services(hass)
     return True
 
 
@@ -158,6 +273,7 @@ async def async_setup_entry(
             hass=hass, entry_id=entry_id,
             entry_data=entry_data,
             persistent_notify=ha_persistent_notify)
+        _wire_client_hooks(hass=hass, miot_client=miot_client)
         # Spec parser
         spec_parser = MIoTSpecParser(
             lang=entry_data.get(
